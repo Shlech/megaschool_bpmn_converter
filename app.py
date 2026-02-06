@@ -51,7 +51,7 @@ def load_ocr_model():
         lang='ru',
         text_det_box_thresh=0.5,
         text_det_unclip_ratio=1.7,
-        enable_mkldnn=True,
+        enable_hpi=True,
         use_doc_orientation_classify=False,
         use_textline_orientation=False,
         text_recognition_batch_size=32,
@@ -65,8 +65,8 @@ def load_ocr_model():
         text_det_limit_side_len = 3000,
         text_det_box_thresh = 0.3,
         text_det_unclip_ratio = 2.2,
-        enable_mkldnn = True,
-        enable_hpi = False,
+        enable_mkldnn = False,
+        enable_hpi = True,
         textline_orientation_batch_size = 32,
         text_recognition_batch_size = 32
     )
