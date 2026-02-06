@@ -19,7 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 obj_path = os.path.join(MODEL_DIR, "object_weights.pt")
 arr_path = os.path.join(MODEL_DIR, "arrow_weights.pt")
-flow_path = os.path.join(MODEL_DIR, "object_model.pt")
+flow_path = os.path.join(MODEL_DIR, "object_weights.pt")
 
 # Загрузка моделей
 def load_detection_models():
