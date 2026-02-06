@@ -328,7 +328,7 @@ def get_lane_names_final(image_np, ocr_model):
     meta = {
         "padding": padding,
         "scale_factor": scale_factor,
-        "rotated_h": h_rot
+        "rotated_h": w_rot
     }
     
     try:
