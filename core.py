@@ -19,23 +19,40 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 obj_path = os.path.join(MODEL_DIR, "object_weights.pt")
 arr_path = os.path.join(MODEL_DIR, "arrow_weights.pt")
+flow_path = os.path.join(MODEL_DIR, "flow_model.pt")
 
 # Загрузка моделей
 def load_detection_models():
-    """Загрузка моделей детекции. Замените на вашу реальную инициализацию"""
-    object_model = AutoDetectionModel.from_pretrained(
+    """Загрузка моделей детекции (1 раз на процесс).
+
+    Возвращает:
+      - bpmn_object_model: для BPMN-объектов (object_weights.pt)
+      - flow_object_model: для обычных (flow) диаграмм (flow_model.pt)
+      - arrow_model: для стрелок (arrow_weights.pt)
+    """
+
+    bpmn_object_model = AutoDetectionModel.from_pretrained(
         model_type='yolov11',
         model_path=obj_path,
         confidence_threshold=0.4,
         device='cpu'
     )
+
+    flow_object_model = AutoDetectionModel.from_pretrained(
+        model_type='yolov11',
+        model_path=flow_path,
+        confidence_threshold=0.4,
+        device='cpu'
+    )
+
     arrow_model = AutoDetectionModel.from_pretrained(
         model_type='yolov11',
         model_path=arr_path,
         confidence_threshold=0.5,
         device='cpu'
     )
-    return object_model, arrow_model
+
+    return bpmn_object_model, flow_object_model, arrow_model
 
 
 def load_ocr_model():
@@ -320,9 +337,7 @@ def get_lane_names_final(image_np, ocr_model):
     # Поворот
     rotated_margin = cv2.rotate(left_margin_scaled, cv2.ROTATE_90_CLOCKWISE)
 
-    # h_rot здесь - это высота ПОВЕРНУТОГО (узкая сторона), w_rot - ширина (длинная сторона)
     h_rot, w_rot = rotated_margin.shape[:2]
-
     padding = int(min(h_rot, w_rot) * 0.106)
     padded_img = cv2.copyMakeBorder(rotated_margin,
                                     padding, padding, padding, padding,
@@ -719,5 +734,48 @@ def generate_bpmn_markdown(objects_data, arrows_data, ocr_objects_data, ocr_lane
 
         step_no += 1
         md_lines.append(f"| **{step_no}** | {text} | {role_display} |")
+
+    return "\n".join(md_lines)
+
+
+def generate_simple_markdown(objects_data, arrows_data, ocr_objects_data):
+    """Обычные (flow) диаграммы → Markdown-таблица.
+
+    Логика восстановления порядка такая же, как для BPMN:
+      1) фильтруем узлы (игнорируем pool/lane/subProcess)
+      2) определяем ориентацию
+      3) строим граф по стрелкам
+      4) восстанавливаем порядок
+      5) сопоставляем OCR-текст с узлами
+
+    Отличие: нет дорожек (Role пустой).
+    """
+    node_items = filter_nodes_for_graph(objects_data)
+    if not node_items:
+        return "No process nodes found."
+
+    orientation = detect_orientation(node_items)
+    adj, indeg = build_graph(node_items, arrows_data)
+    order = restore_order(node_items, adj, indeg, orientation)
+    node_text = match_text_to_nodes(node_items, ocr_objects_data)
+
+    md_lines = ["# Описание", "", f"> Ориентация: **{orientation}**", ""]
+    md_lines.append("| № | Наименование действия | Роль |")
+    md_lines.append("|---:|-----------------------|------|")
+
+    step_no = 0
+    for nid in order:
+        text = (node_text.get(nid, "") or "").replace("\n", " ").strip()
+        if not text:
+            continue
+        if len(text) < 2:
+            continue
+
+        step_no += 1
+        md_lines.append(f"| {step_no} | {text} |  |")
+
+    if step_no == 0:
+        # если OCR ничего не дал — всё равно вернём таблицу, но без строк
+        md_lines.append("|  | *(текст не распознан)* |  |")
 
     return "\n".join(md_lines)

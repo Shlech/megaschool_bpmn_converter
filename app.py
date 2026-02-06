@@ -21,11 +21,18 @@ def main():
         with col1:
             st.image(image, caption="Загруженное изображение", width="stretch")
 
+        ui_choice = st.radio("Тип диаграммы", ["BPMN", "Обычная диаграмма"], horizontal=True)
+
+        diagram_type = "bpmn" if ui_choice == "BPMN" else "simple"
+
         if st.button("Отправить в очередь"):
             resp = requests.post(
                 f"{API}/submit",
                 files={"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)},
-                data={"labels": ""}
+                data={
+                    "labels": "",
+                    "diagram_type": diagram_type  # "bpmn" | "обычная диаграмма"
+                }
             )
             data = resp.json()
             if resp.status_code != 200:

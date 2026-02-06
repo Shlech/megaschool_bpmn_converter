@@ -4,7 +4,7 @@ import time
 import uuid
 import asyncio
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 import numpy as np
 from PIL import Image
@@ -20,6 +20,7 @@ from core import (
     run_ocr_on_detections,
     get_lane_names_final,
     generate_bpmn_markdown,
+    generate_simple_markdown,
     BPMN_CLASSES,
     CLASS_MAPPING,
     LANE_CLASS_ID,
@@ -31,7 +32,7 @@ app = FastAPI(title="Diagram2MD API (Queue)")
 # Настройки очереди/воркеров
 # -----------------------------
 QUEUE_MAXSIZE = int(os.getenv("QUEUE_MAXSIZE", "100"))
-WORKERS = int(os.getenv("WORKERS", "8"))  # попробуй 4/6/8; 32 может быть перебор из-за внутренних потоков OCR/YOLO
+WORKERS = int(os.getenv("WORKERS", "8"))
 RESULT_TTL_SEC = int(os.getenv("RESULT_TTL_SEC", str(60 * 30)))  # 30 минут
 
 MAX_MB = int(os.getenv("MAX_MB", "10"))
@@ -39,7 +40,10 @@ MAX_MB = int(os.getenv("MAX_MB", "10"))
 # -----------------------------
 # Глобальные модели (грузим один раз)
 # -----------------------------
-object_detection_model, arrow_detection_model = load_detection_models()
+# bpmn_object_model -> BPMN блоки
+# flow_object_model -> обычные (flow) диаграммы
+# arrow_model       -> стрелки
+bpmn_object_model, flow_object_model, arrow_detection_model = load_detection_models()
 ocr_object_model, ocr_lane_model = load_ocr_model()
 
 # -----------------------------
@@ -65,10 +69,59 @@ jobs_lock = asyncio.Lock()
 # -----------------------------
 # Внутренняя обработка 1 задачи
 # -----------------------------
-def _process_one_image_bytes(content: bytes, filename: str, labels_csv: str) -> Dict[str, Any]:
+def _process_one_image_bytes(content: bytes, filename: str, labels_csv: str, diagram_type: str) -> Dict[str, Any]:
     # 0) Декод картинки
     img = Image.open(io.BytesIO(content)).convert("RGB")
     image_np = np.array(img)
+
+    # -----------------------------
+    # Обычные диаграммы (flow)
+    # -----------------------------
+    if diagram_type == "simple":
+        # 1) DETECT OBJECTS (flow_model.pt)
+        obj_res = get_sliced_prediction(
+            image_np, flow_object_model,
+            slice_height=640, slice_width=640,
+            overlap_height_ratio=0.3, overlap_width_ratio=0.3,
+            perform_standard_pred=True,
+            postprocess_type='NMS',
+            postprocess_match_threshold=0.3
+        )
+        objects_coco = obj_res.to_coco_predictions()
+
+        # 2) OCR объектов (берём все классы, кроме lane/pool если они есть)
+        # SAHI объект: det.category.id, det.category.name
+        target_class_ids = sorted({
+            det.category.id for det in obj_res.object_prediction_list
+            if getattr(det, "category", None) is not None and det.category.id != LANE_CLASS_ID
+        })
+
+        ocr_objects = run_ocr_on_detections(
+            image_np,
+            obj_res.object_prediction_list,
+            ocr_object_model,
+            target_class_ids
+        )
+
+        # 3) DETECT ARROWS (общая модель стрелок)
+        arrow_res = get_sliced_prediction(
+            image_np, arrow_detection_model,
+            slice_height=640, slice_width=640,
+            overlap_height_ratio=0.4, overlap_width_ratio=0.4,
+            postprocess_type='NMM',
+            postprocess_match_threshold=0.2,
+            verbose=0
+        )
+        arrows_coco = arrow_res.to_coco_predictions()
+
+        # 4) MARKDOWN
+        md = generate_simple_markdown(objects_coco, arrows_coco, ocr_objects)
+
+        return {
+            "filename": filename,
+            "diagram_type": "simple",
+            "markdown": md,
+        }
 
     # 1) Классы
     if labels_csv:
@@ -81,7 +134,7 @@ def _process_one_image_bytes(content: bytes, filename: str, labels_csv: str) -> 
 
     # 2) DETECT OBJECTS
     object_result = get_sliced_prediction(
-        image_np, object_detection_model,
+        image_np, bpmn_object_model,
         slice_height=640, slice_width=640,
         overlap_height_ratio=0.3, overlap_width_ratio=0.3,
         perform_standard_pred=True,
@@ -122,21 +175,29 @@ def _process_one_image_bytes(content: bytes, filename: str, labels_csv: str) -> 
     arrow_predictions_coco = arrow_result.to_coco_predictions()
 
     # 6) MARKDOWN
-    md = generate_bpmn_markdown(
-        object_predictions_coco,
-        arrow_predictions_coco,
-        ocr_results_data,
-        lane_results
-    )
+    if diagram_type == "bpmn":
+        md = generate_bpmn_markdown(
+            object_predictions_coco,
+            arrow_predictions_coco,
+            ocr_results_data,
+            lane_results
+        )
+    else:
+        md = generate_simple_markdown(
+            object_predictions_coco,
+            arrow_predictions_coco,
+            ocr_results_data
+        )
 
     return {
         "filename": filename,
         "markdown": md,
         "selected_labels": selected_labels,
+        "diagram_type": diagram_type,
     }
 
 
-async def _run_job(job_id: str, content: bytes, filename: str, labels_csv: str):
+async def _run_job(job_id: str, content: bytes, filename: str, labels_csv: str, diagram_type: str):
     # обновляем статус
     async with jobs_lock:
         st = jobs.get(job_id)
@@ -147,7 +208,7 @@ async def _run_job(job_id: str, content: bytes, filename: str, labels_csv: str):
 
     try:
         # ВАЖНО: это CPU-bound и блокирующее => выносим в thread
-        result = await asyncio.to_thread(_process_one_image_bytes, content, filename, labels_csv)
+        result = await asyncio.to_thread(_process_one_image_bytes, content, filename, labels_csv, diagram_type)
 
         async with jobs_lock:
             st = jobs.get(job_id)
@@ -206,8 +267,10 @@ def health():
 @app.post("/submit")
 async def submit_diagram(
     file: UploadFile = File(...),
-    labels: str = Form(""),  # "task,event,exclusiveGateway"
+    labels: str = Form(""),
+    diagram_type: str = Form("bpmn"),  # <-- НОВОЕ
 ):
+
     # 1) тип файла
     if not (file.content_type or "").startswith("image/"):
         return JSONResponse(status_code=400, content={"error": "Upload an image file"})
@@ -235,6 +298,7 @@ async def submit_diagram(
         "content": content,
         "filename": file.filename,
         "labels_csv": labels or "",
+        "diagram_type": diagram_type,
     })
 
     return {"job_id": job_id, "status": "queued"}
