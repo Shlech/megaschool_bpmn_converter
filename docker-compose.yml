@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: diagram_api
+    volumes:
+      - ./models:/app/models  
+    environment:
+      - WORKERS=4             
+      - QUEUE_MAXSIZE=50
+    ports:
+      - "8000:8000"
+    restart: always
+
+  streamlit_app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: diagram_ui
+    environment:
+      - API_URL=http://api:8000  
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+    restart: always
