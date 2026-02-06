@@ -598,44 +598,51 @@ def assign_container_to_nodes(node_items, containers_sorted, orientation, margin
         node2container[nid] = best_id
     return node2container
 
+
 def match_lane_labels_fixed(lanes_deduped, lane_label_items, orientation):
-    """
-    Сопоставляет OCR результаты (lane_label_items) с геометрическими лейнами (lanes_deduped).
-    """
     lane_id2name = {}
-    
-    # lane_label_items это список dict: [{'lane_name': '...', 'bbox': ...}, ...]
     labels = [it for it in lane_label_items if it.get("lane_name")]
+
+    # Чтобы не назначать один лейбл разным дорожкам
+    used_labels = set()
 
     for lane_id, lane_obj in lanes_deduped:
         lx, ly, lw, lh = lane_obj["bbox"]
-        
-        # Определяем зону поиска названия (заголовок обычно слева или сверху)
-        best_label = None
-        # Ищем лейбл, который пересекается с левой частью лейна (для horizontal)
-        # или просто ближайший
-        
-        lane_center = (lx, ly + lh/2)
-        min_dist = float('inf')
-        
-        for lbl in labels:
+
+        # Центр левой границы дорожки (Anchor point)
+        lane_anchor = (lx, ly + lh / 2)
+
+        candidates = []
+        for idx, lbl in enumerate(labels):
+            if idx in used_labels:
+                continue
+
             lbl_center = bbox_center(lbl['bbox'])
-            # Расстояние от центра лейбла до "начала" дорожки
-            d = dist(lane_center, lbl_center)
-            
-            # Или проверка на IoU, если заголовок внутри
-            iou = bbox_iou(lane_obj['bbox'], lbl['bbox'])
-            
-            if iou > 0 or d < min_dist:
-                if d < min_dist:
-                    min_dist = d
-                    best_label = lbl['lane_name']
-        
-        if best_label and min_dist < 500: # Эвристика дальности
-            lane_id2name[lane_id] = best_label
+
+            # Проверяем попадание внутрь
+            is_inside = calculate_iou(lane_obj['bbox'], lbl['bbox']) > 0
+
+            # Считаем расстояние
+            d = dist(lane_anchor, lbl_center)
+
+            candidates.append((d, is_inside, idx, lbl))
+
+        # Сортируем: сначала те, что внутри (is_inside=True), потом по расстоянию
+        # is_inside (True=1, False=0), поэтому сортируем по убыванию is_inside и возрастанию d
+        candidates.sort(key=lambda x: (not x[1], x[0]))
+
+        if candidates:
+            # Берем лучшего кандидата
+            best_match = candidates[0]
+            # Эвристика: если расстояние слишком большое (>1000) и не внутри, возможно это ошибка
+            if best_match[1] or best_match[0] < 1000:
+                lane_id2name[lane_id] = best_match[3]['lane_name']
+                used_labels.add(best_match[2])
+            else:
+                lane_id2name[lane_id] = "Unnamed Lane"
         else:
             lane_id2name[lane_id] = "Unnamed Lane"
-            
+
     return lane_id2name
 
 # -----------------------------
