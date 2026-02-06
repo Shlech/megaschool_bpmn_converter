@@ -31,7 +31,7 @@ app = FastAPI(title="Diagram2MD API (Queue)")
 # Настройки очереди/воркеров
 # -----------------------------
 QUEUE_MAXSIZE = int(os.getenv("QUEUE_MAXSIZE", "100"))
-WORKERS = int(os.getenv("WORKERS", "4"))  # попробуй 4/6/8; 32 может быть перебор из-за внутренних потоков OCR/YOLO
+WORKERS = int(os.getenv("WORKERS", "8"))  # попробуй 4/6/8; 32 может быть перебор из-за внутренних потоков OCR/YOLO
 RESULT_TTL_SEC = int(os.getenv("RESULT_TTL_SEC", str(60 * 30)))  # 30 минут
 
 MAX_MB = int(os.getenv("MAX_MB", "10"))
