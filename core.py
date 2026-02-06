@@ -690,7 +690,7 @@ def generate_bpmn_markdown(objects_data, arrows_data, ocr_objects_data, ocr_lane
     # 2. Работа с дорожками (Логика остается прежней)
     raw_lanes = extract_by_class(objects_data, {"lane", "pool"})
     lanes_deduped = dedupe_by_plane_y(raw_lanes, orientation)
-    lane_id2name = match_lane_labels_fixed(lanes_deduped, ocr_lanes_data)
+    lane_id2name = match_lane_labels_fixed(lanes_deduped, ocr_lanes_data, orientation)
     node2lane = assign_container_to_nodes(node_items, lanes_deduped, orientation)
 
     # 3. ГЕНЕРАЦИЯ ТАБЛИЦЫ MARKDOWN
